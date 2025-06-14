@@ -40,7 +40,8 @@ class DecoupledEncoder(BaseEncoder):
 
         # Compute shared encoder forward pass
         m = self.shared_encoder(x)
-
+        #print("[DEBUG] mean of one-hot dims (last 4) in x:", x[:, -4:].mean(dim=0))
+ 
         # Compute class encoder forward pass
         mu = self.fc_mu(m)
         log_var = self.fc_log_var(m)

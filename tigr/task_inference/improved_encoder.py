@@ -21,6 +21,8 @@ class GruAttentionEncoder(nn.Module):
         hidden = self.initHidden(x.size(0))
 
         x = x.view(x.size(0), self.time_steps, self.input_size)
+        hidden = hidden.to(x.device)
+
         _, hidden = self.gru(x, hidden)
 
         hidden = hidden.squeeze(0)

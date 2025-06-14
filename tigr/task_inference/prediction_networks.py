@@ -39,6 +39,12 @@ class DecoderMDP(nn.Module):
         )
 
     def forward(self, state, action, next_state, z):
+        # Move all inputs to the same device
+        device = state.device
+        state = state.to(device)
+        action = action.to(device)
+        next_state=next_state.to(device)
+        z = z.to(device)    
         state_estimate = self.net_state_decoder(torch.cat([state, action, z], dim=-1))
         reward_estimate = self.net_reward_decoder(torch.cat([state, action, z], dim=-1))
 

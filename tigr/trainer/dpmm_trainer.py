@@ -13,7 +13,7 @@ from rlkit.launchers.launcher_util import dict_to_safe_json
 from tqdm import tqdm
 
 from tigr.trainer.base_trainer import AugmentedTrainer as BaseTrainer
-
+from legged_gym.scripts.universal_policy_config import UniversalpolicyCfg
 import vis_utils.tb_logging as TB
 
 
@@ -49,6 +49,8 @@ class AugmentedTrainer(BaseTrainer):
         self.loss_ce = nn.CrossEntropyLoss(reduction='none')
         # self.prev_reward_loss = torch.zeros(self.batch_size)
         self.current_epoch = None
+        self.next_DPMM_fitting_epoch=0
+        self.total_epochs=UniversalpolicyCfg.max_epoch
 
     def train(self, mixture_steps, w_method='val_value_based', current_epoch=0):
         self.current_epoch = current_epoch
@@ -68,8 +70,16 @@ class AugmentedTrainer(BaseTrainer):
             # Perform training step
             _, z = self.mixture_training_step(train_indices)
             # # train bnp_model for every step
-            if self.encoder.bnp_model.fit_interval == 'step' and current_epoch >= self.encoder.bnp_model.start_epoch:
+            if self.encoder.bnp_model.fit_interval == 'epoch' and current_epoch >= self.encoder.bnp_model.start_epoch:
                 self.encoder.bnp_model.fit(z)
+            #added, adaptive fitting, based on https://github.com/Eibozhenko-Mikhail/gasp/blob/62999c3f973b62c08aa032df54ff01fac226ef02/gasp/train.py#L209
+            elif self.encoder.bnp_model.fit_interval == 'adaptive' and current_epoch >= self.encoder.bnp_model.start_epoch:
+                if current_epoch == self.next_DPMM_fitting_epoch:
+                    self.encoder.bnp_model.fit(z)
+                    interval = int(np.exp(4*current_epoch/self.total_epochs)//1)  # adaptive interval
+                    self.next_DPMM_fitting_epoch += interval
+                    print(f"[INFO] Adaptive DPMM fit at epoch {current_epoch}, next fit scheduled at {self.next_DPMM_fitting_epoch}")
+
 
             self._n_train_steps_mixture += 1
 
@@ -81,7 +91,7 @@ class AugmentedTrainer(BaseTrainer):
         # train bnp_model for every epoch
         if self.encoder.bnp_model.fit_interval == 'epoch' and current_epoch >= self.encoder.bnp_model.start_epoch:
             self.encoder.bnp_model.fit(z)
-            self.encoder.bnp_model.plot_clusters(z, suffix=str(current_epoch))
+            #self.encoder.bnp_model.plot_clusters(z, suffix=str(current_epoch))
 
         return self.lowest_loss_epoch
 
@@ -109,7 +119,7 @@ class AugmentedTrainer(BaseTrainer):
         unique_tasks = torch.unique(ptu.from_numpy(true_task).long()).tolist()
         targets = ptu.from_numpy(true_task).long()
 
-        decoder_state_target = next_states[:, :, :self.state_reconstruction_clip]    # torch.Size([batch_size_reconstruction, time_step, state_dim])
+        decoder_state_target = next_states[:, :, :self.state_reconstruction_clip].to(states.device)    # torch.Size([batch_size_reconstruction, time_step, state_dim])
 
         '''
         MIXTURE MODEL TRAINING
@@ -119,6 +129,8 @@ class AugmentedTrainer(BaseTrainer):
         encoder_input = self.replay_buffer.make_encoder_data(e_data, self.batch_size)
 
         # Forward pass through encoder
+        print("[DEBUG] encoder_input.shape:", encoder_input.shape)
+
         mu, log_var = self.encoder.encode(encoder_input)
         # latent_distributions, alpha, beta = self.encoder.encode(encoder_input)
         assert not torch.isnan(mu).any(), mu
@@ -136,7 +148,12 @@ class AugmentedTrainer(BaseTrainer):
 
         state_estimate, reward_estimate = self.decoder(states, actions, decoder_state_target,
                                                        latent_variables.unsqueeze(1).repeat(1, states.shape[1], 1))
+        decoder_state_target=decoder_state_target.to(state_estimate.device)
+        print("[DEBUG] decoder_state_target device:", decoder_state_target.device)
+
         mixture_state_loss = torch.mean((decoder_state_target - state_estimate) ** 2, dim=[-2, -1])
+        rewards = rewards.to(reward_estimate.device)
+        
         mixture_reward_loss = torch.mean((rewards - reward_estimate) ** 2, dim=[-2, -1])
 
         # if torch.mean(mixture_reward_loss - self.prev_reward_loss.to(mixture_reward_loss.device)) > 0.01:
@@ -296,7 +313,7 @@ class AugmentedTrainer(BaseTrainer):
         true_task = np.array([a['base_task'] for a in d_data['true_tasks'][:, -1, 0]], dtype=np.int)
         targets = ptu.from_numpy(true_task).long()
 
-        decoder_state_target = next_states[:, :self.state_reconstruction_clip]
+        decoder_state_target = next_states[:, :self.state_reconstruction_clip].to(states.device)
 
         '''
         MIXTURE MODEL
@@ -317,7 +334,15 @@ class AugmentedTrainer(BaseTrainer):
             '''
             Dynamics Prediction Loss
             '''
-
+            # Force all decoder inputs to same device 
+            target_device = states.device
+            actions = actions.to(target_device)
+            states = states.to(target_device)
+            next_states = next_states.to(target_device)
+            rewards = rewards.to(target_device)
+            terminals = terminals.to(target_device)
+            decoder_state_target = decoder_state_target.to(target_device)
+            latent_variables = latent_variables.to(target_device)
             # Calculate standard losses
             # Put in decoder to get likelihood
             state_estimate, reward_estimate = self.decoder(states, actions, decoder_state_target, latent_variables)
