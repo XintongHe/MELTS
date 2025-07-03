@@ -47,6 +47,9 @@ def generate_mvn_gaussian(mu_sigma, latent_dim, sigma_ops='softplus', mode=None)
 
     if mode == 'multiplication':
         mus, sigmas = product_of_gaussians3D(mus, sigmas)
+    identity = ptu.from_numpy(np.eye(latent_dim)).to(sigmas.device)
+    cov_matrix = (sigmas.unsqueeze(-1) + 1e-8) * identity.view(*([1 for _ in range(sigmas.ndim - 1)] + [latent_dim, latent_dim]))
+    return torch.distributions.multivariate_normal.MultivariateNormal(loc=mus, covariance_matrix=cov_matrix)
 
     # Avoid singular covariance matrix by adding 1e-8 uncertainty
-    return torch.distributions.multivariate_normal.MultivariateNormal(loc=mus, covariance_matrix=(sigmas.unsqueeze(-1) + 1e-8) * ptu.from_numpy(np.eye(latent_dim)).view(*([1 for _ in range(sigmas.ndim - 1)] + [latent_dim, latent_dim])))
+    #return torch.distributions.multivariate_normal.MultivariateNormal(loc=mus, covariance_matrix=(sigmas.unsqueeze(-1) + 1e-8) * ptu.from_numpy(np.eye(latent_dim)).view(*([1 for _ in range(sigmas.ndim - 1)] + [latent_dim, latent_dim])))
